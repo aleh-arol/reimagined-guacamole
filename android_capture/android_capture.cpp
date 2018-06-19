@@ -14,11 +14,6 @@ using _timer = std::chrono::high_resolution_clock;
 using time_stamp_t = std::chrono::time_point<std::chrono::high_resolution_clock>;
 using steady_timestamp_t = std::chrono::time_point<std::chrono::steady_clock>;
 
-static constexpr uint32_t fourcc( char const p[5] )
-{
-    return (p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3];
-}
-
 bool run_capture(const std::string& dest_path, const std::string& codec_fourcc, unsigned frames_count, unsigned camera_id, unsigned api_id)
 {
     assert(frames_count > 0);
@@ -26,7 +21,7 @@ bool run_capture(const std::string& dest_path, const std::string& codec_fourcc, 
 
     unsigned frame_counter = 0;
 
-    cv::Mat frame;
+    cv::Mat frame, face_frame;
     cv::VideoCapture cap;
     cv::VideoWriter encoder;
 
@@ -47,13 +42,45 @@ bool run_capture(const std::string& dest_path, const std::string& codec_fourcc, 
         //try to open writer
         //MJPG or X264
         unsigned output_codec = codec_fourcc.empty() ? codec : cv::VideoWriter::fourcc(codec_fourcc[0], codec_fourcc[1], codec_fourcc[2], codec_fourcc[3]);
+
+        //encoding fps should be equal to real encoding fps, otherwise video will be too fast
+        //so the one need to estimate avg fps before encoding
         if (encoder.open(dest_path, output_codec, cam_fps, frame_dim))
         {
+#if FACE_DETECTION
+            auto face_cascade = cv::CascadeClassifier("lbpcascade_frontalface_improved.xml");
+#endif
             auto start_time = std::chrono::high_resolution_clock::now();
             while(frames_count--)
             {
                 cap.read(frame);
-                encoder.write(frame);
+
+#if FACE_DETECTION
+                //detect faces
+
+                std::vector<cv::Rect> rois;
+                std::vector<int> detection_levels;
+
+                auto gray_frame = cv::Mat();
+                cv::cvtColor(frame, gray_frame, cv::COLOR_BGR2GRAY);
+                face_cascade.detectMultiScale(gray_frame, rois, detection_levels);
+
+                // only extract a single face
+                if (!rois.empty())
+                {
+                    auto roi = rois[0];
+                    frame(roi).copyTo(face_frame);
+
+                    cv::copyMakeBorder(face_frame, face_frame, roi.y, frame_dim.height - (roi.y + roi.height), roi.x, frame_dim.width - (roi.x + roi.width), cv::BORDER_CONSTANT, 40);
+                }
+                else
+                {
+                    face_frame = cv::Mat(frame_dim, frame.type());
+                }
+#else
+                auto face_frame = frame;
+#endif
+                encoder.write(face_frame);
                 ++frame_counter;
 
                 // check if we succeeded
